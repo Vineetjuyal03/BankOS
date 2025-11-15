@@ -187,8 +187,12 @@ router.get('/user', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const [accounts] = await pool.query(
-      'SELECT account_no, account_type, balance FROM accounts WHERE owner_user_id = ?',
-      [userId]
+      `SELECT DISTINCT a.account_no, a.account_type, a.balance
+       FROM accounts a
+       LEFT JOIN user_account_links ual ON a.account_no = ual.account_no
+       WHERE a.owner_user_id = ?
+          OR ual.user_id = ?`,
+      [userId, userId]
     );
     res.json(accounts);
   } catch (error) {
@@ -202,25 +206,26 @@ router.get('/details', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   const accountNo = req.query.account_no;
 
-  if (!accountNo) {
-    return res.status(400).json({ message: 'Missing account_no query parameter' });
-  }
+  if (!accountNo) return res.status(400).json({ message: 'Missing account_no' });
 
   try {
-    // Fetch account joined with user email to show owner email
+    // Check access: owner or linked user
     const [rows] = await pool.query(
-      `SELECT a.account_no, a.account_type, a.balance, a.created_at, u.email as owner_email
+      `SELECT a.account_no, a.account_type, a.balance, a.owner_user_id, u.email AS owner_email, a.created_at
        FROM accounts a
-       JOIN users u ON a.owner_user_id = u.user_id
-       WHERE a.account_no = ? AND a.owner_user_id = ?`,
-      [accountNo, userId]
+       JOIN users u ON u.user_id = a.owner_user_id
+       LEFT JOIN user_account_links ua ON ua.account_no = a.account_no
+       WHERE a.account_no = ?
+         AND (a.owner_user_id = ? OR ua.user_id = ?)`,
+      [accountNo, userId, userId]
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({ message: 'Account not found or access denied' });
+      return res.status(403).json({ message: 'Access denied or account not found' });
     }
 
-    res.json(rows[0]);
+    const account = rows[0];
+    res.json(account);
   } catch (error) {
     console.error('Error fetching account details:', error);
     res.status(500).json({ message: 'Internal server error' });
@@ -230,24 +235,23 @@ router.get('/transactions/history', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   const accountNo = req.query.account_no;
 
-  if (!accountNo) {
-    return res.status(400).json({ message: 'Missing account_no query parameter' });
-  }
+  if (!accountNo) return res.status(400).json({ message: 'Missing account_no' });
 
   try {
-    // Verify that user owns the account or has access
-    const [accountRows] = await pool.query(
-      'SELECT account_no FROM accounts WHERE account_no = ? AND owner_user_id = ?',
-      [accountNo, userId]
+    const [authRows] = await pool.query(
+      `SELECT 1 FROM accounts WHERE account_no = ? AND owner_user_id = ?
+       UNION
+       SELECT 1 FROM user_account_links WHERE account_no = ? AND user_id = ?`,
+      [accountNo, userId, accountNo, userId]
     );
 
-    if (accountRows.length === 0) {
-      return res.status(403).json({ message: 'Access denied to this account' });
+    if (authRows.length === 0) {
+      return res.status(403).json({ message: 'Access denied to view transactions' });
     }
 
-    // Get all transactions where account is from_account or to_account, sorted by date desc
+    // Fetch transactions if authorized
     const [transactions] = await pool.query(
-      `SELECT transaction_id, from_account, to_account, amount, transaction_type, transaction_date
+      `SELECT transaction_id, transaction_type, from_account, to_account, amount, transaction_date
        FROM transactions
        WHERE from_account = ? OR to_account = ?
        ORDER BY transaction_date DESC`,
@@ -255,10 +259,173 @@ router.get('/transactions/history', authenticateToken, async (req, res) => {
     );
 
     res.json(transactions);
-  } catch (error) {
-    console.error('Error fetching transaction history:', error);
+  } catch (err) {
+    console.error('Error fetching transaction history:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
+});
+
+// GET list of users with access to an account
+// GET list of users with access including primary owner
+router.get('/access', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const accountNo = req.query.account_no;
+
+  if (!accountNo) return res.status(400).json({ message: 'Missing account_no' });
+
+  // Verify requesting user has access via links or is primary owner
+  const [verifyRows] = await pool.query(
+    `SELECT 1 FROM user_account_links WHERE user_id = ? AND account_no = ? 
+     UNION 
+     SELECT 1 FROM accounts WHERE owner_user_id = ? AND account_no = ?`,
+    [userId, accountNo, userId, accountNo]
+  );
+  if (verifyRows.length === 0) {
+    return res.status(403).json({ message: 'Access denied' });
+  }
+
+  // Get owner user id
+  const [ownerRows] = await pool.query(
+    `SELECT owner_user_id FROM accounts WHERE account_no = ?`,
+    [accountNo]
+  );
+  if (ownerRows.length === 0) {
+    return res.status(404).json({ message: 'Account not found' });
+  }
+  const ownerUserId = ownerRows[0].owner_user_id;
+
+  // Get all users linked plus owner
+  const [users] = await pool.query(
+    `SELECT u.user_id, u.username, u.email 
+     FROM users u 
+     JOIN user_account_links ua ON u.user_id = ua.user_id 
+     WHERE ua.account_no = ?
+
+     UNION 
+
+     SELECT u2.user_id, u2.username, u2.email 
+     FROM users u2
+     WHERE u2.user_id = ?
+
+     ORDER BY username`,
+    [accountNo, ownerUserId]
+  );
+
+  res.json({ owner_user_id: ownerUserId, users });
+});
+
+
+// POST add user access to account (as you provided)
+router.post('/access/add', authenticateToken, async (req, res) => {
+  const requestingUserId = req.user.id;
+  const { account_no, user_email, transaction_pin } = req.body;
+
+  if (!account_no || !user_email || !transaction_pin) {
+    return res.status(400).json({ message: 'Missing fields' });
+  }
+
+  try {
+    // Check requester has access to the account
+    const [verifyRows] = await pool.query(
+      `SELECT 1 FROM user_account_links WHERE user_id = ? AND account_no = ?
+       UNION
+       SELECT 1 FROM accounts WHERE owner_user_id = ? AND account_no = ?`,
+      [requestingUserId, account_no, requestingUserId, account_no]
+    );
+    if (verifyRows.length === 0) {
+      return res.status(403).json({ message: 'Access denied to manage this account' });
+    }
+
+    // Get account owner transaction PIN
+    const [ownerRows] = await pool.query(
+      `SELECT transaction_pin FROM accounts WHERE account_no = ?`,
+      [account_no]
+    );
+    if (ownerRows.length === 0) {
+      return res.status(404).json({ message: 'Account not found' });
+    }
+    const hashedPin = ownerRows[0].transaction_pin;
+
+    // Verify transaction pin
+    const pinValid = await bcrypt.compare(transaction_pin, hashedPin);
+    if (!pinValid) {
+      return res.status(403).json({ message: 'Incorrect transaction PIN' });
+    }
+
+    // Lookup user by email
+    const [userRows] = await pool.query(
+      `SELECT user_id FROM users WHERE email = ?`,
+      [user_email]
+    );
+    if (userRows.length === 0) {
+      return res.status(404).json({ message: 'User with this email does not exist' });
+    }
+    const targetUserId = userRows[0].user_id;
+
+    // Add user access (ignore if exists)
+    await pool.query(
+      `INSERT IGNORE INTO user_account_links (user_id, account_no) VALUES (?, ?)`,
+      [targetUserId, account_no]
+    );
+
+    res.json({ message: 'User access added successfully' });
+  } catch (err) {
+    console.error('Error adding user access:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+
+router.post('/access/remove', authenticateToken, async (req, res) => {
+  const requestingUserId = req.user.id;
+  const { account_no, user_id, transaction_pin } = req.body;
+
+  if (!account_no || !user_id || !transaction_pin) {
+    return res.status(400).json({ message: 'Missing fields' });
+  }
+
+  // Verify requester has access to the account (linked user or owner)
+  const [verifyRows] = await pool.query(
+    `SELECT 1 FROM user_account_links WHERE user_id = ? AND account_no = ?
+     UNION
+     SELECT 1 FROM accounts WHERE owner_user_id = ? AND account_no = ?`,
+    [requestingUserId, account_no, requestingUserId, account_no]
+  );
+
+  if (verifyRows.length === 0) {
+    return res.status(403).json({ message: 'Access denied to manage this account' });
+  }
+
+  // Get account owner's transaction PIN hash
+  const [ownerRows] = await pool.query(
+    'SELECT transaction_pin, owner_user_id FROM accounts WHERE account_no = ?',
+    [account_no]
+  );
+
+  if (ownerRows.length === 0) {
+    return res.status(404).json({ message: 'Account not found' });
+  }
+
+  const { transaction_pin: hashedPin, owner_user_id } = ownerRows[0];
+
+  // Prevent removing owner's own access
+  if (user_id === owner_user_id) {
+    return res.status(400).json({ message: 'Cannot remove owner access' });
+  }
+
+  // Verify transaction PIN
+  const pinValid = await bcrypt.compare(transaction_pin, hashedPin);
+  if (!pinValid) {
+    return res.status(403).json({ message: 'Incorrect transaction PIN' });
+  }
+
+  // Delete user access mapping
+  await pool.query(
+    'DELETE FROM user_account_links WHERE user_id = ? AND account_no = ?',
+    [user_id, account_no]
+  );
+
+  res.json({ message: 'User access removed successfully' });
 });
 
 module.exports = router;

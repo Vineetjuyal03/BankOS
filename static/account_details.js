@@ -220,3 +220,12 @@ transactionForm.addEventListener('submit', async (e) => {
     alert('Network error: ' + error.message);
   }
 });
+const accessBtn = document.getElementById('accessBtn');
+
+accessBtn.addEventListener('click', () => {
+  // Get the current account number from the page (assumes you already have it)
+  const accountNo = document.getElementById('accountNo').textContent.trim();
+
+  // Redirect to the account access page, passing the account_no as a query param
+  window.location.href = `/account_access.html?account_no=${encodeURIComponent(accountNo)}`;
+});
