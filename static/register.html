@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign Up - BankOS</title>
+  <link rel="stylesheet" href="styles2.css" />
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <div class="form-container">
+    <h2>Sign Up</h2>
+    <form id="registerForm">
+      <input type="text" id="username" placeholder="Username" required />
+      <input type="email" id="email" placeholder="Email" required />
+      <input type="password" id="password" placeholder="Password" required minlength="6"/>
+      <button type="submit">Register</button>
+    </form>
+
+    <div id="g_id_onload"
+      data-client_id="900108182771-8jd4ilbcg4ffklfhiv1sjrh35gm33a66.apps.googleusercontent.com"
+      data-context="signup"
+      data-callback="handleCredentialResponse"
+      data-auto_prompt="false">
+    </div>
+
+    <div class="g_id_signin" data-type="standard"></div>
+
+    <p>Already have an account? <a href="login.html">Login here</a></p>
+  </div>
+
+  <script src="register.js"></script>
+  <script>
+    function handleCredentialResponse(response) {
+      // Send ID token to backend to register/login user
+      fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: response.credential }),
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.token) {
+            localStorage.setItem('token', data.token);
+            alert('Google sign-up/login successful!');
+            window.location.href = '/dashboard.html';
+          } else {
+            alert('Google sign-in failed.');
+          }
+        })
+        .catch(() => alert('Sign-in error'));
+    }
+  </script>
+</body>
+</html>

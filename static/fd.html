@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fixed Deposits - BankOS</title>
+  <link rel="stylesheet" href="fd.css" />
+</head>
+<body>
+  <header>
+    <h1>Fixed Deposits</h1>
+    <button id="backBtn">Back to Dashboard</button>
+  </header>
+
+  <main>
+    <section id="createFdSection">
+      <h2>Create Fixed Deposit</h2>
+      <form id="createFdForm">
+        <label>Principal Amount</label>
+        <input type="number" id="principal" min="1000" required />
+
+        <label>Tenure (months)</label>
+        <input type="number" id="tenure" min="1" max="60" required />
+
+        <label>Interest Rate (%)</label>
+        <input type="number" id="interestRate" step="0.01" min="1" max="15" required />
+
+        <button type="submit">Create FD</button>
+      </form>
+      <p id="createFdMessage"></p>
+    </section>
+
+    <section id="fdListSection">
+      <h2>Your Fixed Deposits</h2>
+      <div id="fdList">Loading...</div>
+    </section>
+  </main>
+
+  <script src="fd.js"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BankOS Dashboard</title>
+<link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <header>
+    <h1>BankOS Dashboard</h1>
+    <div id="userSection">
+      <span id="usernameDisplay">User</span>
+      <button id="logoutBtn" title="Logout">Logout</button>
+    </div>
+    <button id="toggleThemeBtn" title="Toggle Dark/Light Mode" aria-label="Toggle Dark/Light Mode">
+      <!-- Sun (light mode) icon --> 
+      <svg id="lightIcon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="yellow" viewBox="0 0 24 24" style="display:none;">
+        <circle cx="12" cy="12" r="5" />
+        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M16.95 16.95l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M16.95 7.05l1.42-1.42" stroke="orange" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <!-- Moon (dark mode) icon -->
+      <svg id="darkIcon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="lightgray" viewBox="0 0 24 24" style="display:none;">
+        <path d="M21 12.79A9 9 0 0112.21 3a7 7 0 000 14 9 9 0 018.79-4.21z"/>
+      </svg>
+    </button>
+  </header>
+
+  <main>
+    <section id="accountSummary">
+      <h2>Your Accounts</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Account No</th>
+            <th>Type</th>
+            <th>Balance</th>
+          </tr>
+        </thead>
+        <tbody id="accountsTableBody">
+          <!-- Account rows will be injected here -->
+        </tbody>
+      </table>
+      <button id="createAccountBtn">Create New Account</button>
+    </section>
+  </main>
+
+<script src="dashboard.js"></script>
+</body>
+</html>
