@@ -16,7 +16,6 @@ app.use(express.static(path.join(__dirname,'..', 'static')));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/accounts', accountsRoutes);
-
 // Optional: Basic error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);

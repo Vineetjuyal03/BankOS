@@ -189,7 +189,7 @@ transactionForm.addEventListener('submit', async (e) => {
     to_account: transactionType === 'TRANSFER' ? toAccount : fromAccount
   };
 
-  alert('Debug: Sending transaction to backend: ' + JSON.stringify(payload));
+  console.log('Debug: Sending transaction to backend: ' + JSON.stringify(payload));
 
   try {
     const token = localStorage.getItem('token');
