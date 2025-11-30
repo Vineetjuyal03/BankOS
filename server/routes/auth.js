@@ -11,9 +11,13 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
+  port: 4000, // TiDB Serverless port
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
+  ssl: {
+    minVersion: 'TLSv1.2'
+  }
 });
 
 function createToken(user) {
