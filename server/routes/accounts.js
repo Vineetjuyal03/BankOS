@@ -152,30 +152,6 @@ async function processInterestForAccount(accountNo) {
   }
 }
 
-// Transaction processing queue logic (existing)
-const transactionQueue = [];
-let processing = false;
-
-async function processNextTransaction() {
-  if (processing) return;
-  if (transactionQueue.length === 0) return;
-
-  processing = true;
-  const { req, res } = transactionQueue.shift();
-
-  try {
-    await handleTransaction(req, res);
-  } catch (error) {
-    console.error('Transaction processing error:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ message: 'Internal server error' });
-    }
-  } finally {
-    processing = false;
-    processNextTransaction();
-  }
-}
-
 async function handleTransaction(req, res) {
   const userId = req.user.id;
   const { transaction_type, amount, transaction_pin, from_account, to_account } = req.body;
@@ -190,6 +166,10 @@ async function handleTransaction(req, res) {
 
   if (typeof amount !== 'number' || amount <= 0) {
     return res.status(400).json({ message: 'Invalid amount' });
+  }
+
+  if (transaction_type === 'TRANSFER' && from_account === to_account) {
+    return res.status(400).json({ message: 'Cannot transfer to the same account' });
   }
 
   // Verify ownership or access of from_account and get transaction_pin hash
@@ -209,47 +189,97 @@ async function handleTransaction(req, res) {
     return res.status(403).json({ message: 'Incorrect transaction PIN' });
   }
 
-  const [toAccRows] = await pool.query(
-    'SELECT 1 FROM accounts WHERE account_no = ?',
-    [to_account]
-  );
-  if (toAccRows.length === 0) {
-    return res.status(400).json({ message: 'to_account does not exist' });
-  }
-
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
 
     if (transaction_type === 'DEPOSIT') {
+      // Lock the to_account row for update
+      const [toAccRows] = await connection.query(
+        'SELECT balance FROM accounts WHERE account_no = ? FOR UPDATE',
+        [to_account]
+      );
+      if (toAccRows.length === 0) {
+        await connection.rollback();
+        connection.release();
+        return res.status(400).json({ message: 'to_account does not exist' });
+      }
+
       await connection.query(
         'UPDATE accounts SET balance = balance + ? WHERE account_no = ?',
         [amount, to_account]
       );
     } else if (transaction_type === 'WITHDRAW') {
-      const [balanceRows] = await connection.query(
-        'SELECT balance FROM accounts WHERE account_no = ?',
+      // Verify to_account exists
+      const [toAccRows] = await connection.query(
+        'SELECT 1 FROM accounts WHERE account_no = ?',
+        [to_account]
+      );
+      if (toAccRows.length === 0) {
+        await connection.rollback();
+        connection.release();
+        return res.status(400).json({ message: 'to_account does not exist' });
+      }
+
+      // Lock the from_account row for update
+      const [fromAccRowsLock] = await connection.query(
+        'SELECT balance FROM accounts WHERE account_no = ? FOR UPDATE',
         [from_account]
       );
-      if (balanceRows[0].balance < amount) {
+      if (fromAccRowsLock.length === 0) {
+        await connection.rollback();
+        connection.release();
+        return res.status(400).json({ message: 'from_account does not exist' });
+      }
+
+      const balance = parseFloat(fromAccRowsLock[0].balance);
+      if (balance < amount) {
         await connection.rollback();
         connection.release();
         return res.status(400).json({ message: 'Insufficient funds' });
       }
+
       await connection.query(
         'UPDATE accounts SET balance = balance - ? WHERE account_no = ?',
         [amount, from_account]
       );
     } else if (transaction_type === 'TRANSFER') {
-      const [balanceRows] = await connection.query(
-        'SELECT balance FROM accounts WHERE account_no = ?',
-        [from_account]
+      // Lock multiple accounts in a consistent order to prevent deadlocks
+      const first_account = from_account < to_account ? from_account : to_account;
+      const second_account = from_account < to_account ? to_account : from_account;
+
+      // Lock first account row
+      const [firstAccRows] = await connection.query(
+        'SELECT balance FROM accounts WHERE account_no = ? FOR UPDATE',
+        [first_account]
       );
-      if (balanceRows[0].balance < amount) {
+      if (firstAccRows.length === 0) {
+        await connection.rollback();
+        connection.release();
+        return res.status(400).json({ message: `Account ${first_account} does not exist` });
+      }
+
+      // Lock second account row
+      const [secondAccRows] = await connection.query(
+        'SELECT balance FROM accounts WHERE account_no = ? FOR UPDATE',
+        [second_account]
+      );
+      if (secondAccRows.length === 0) {
+        await connection.rollback();
+        connection.release();
+        return res.status(400).json({ message: `Account ${second_account} does not exist` });
+      }
+
+      // Identify the balance of the from_account
+      const fromAccRow = from_account === first_account ? firstAccRows[0] : secondAccRows[0];
+      const balance = parseFloat(fromAccRow.balance);
+      if (balance < amount) {
         await connection.rollback();
         connection.release();
         return res.status(400).json({ message: 'Insufficient funds' });
       }
+
+      // Update the balances of both accounts
       await connection.query(
         'UPDATE accounts SET balance = balance - ? WHERE account_no = ?',
         [amount, from_account]
@@ -277,10 +307,16 @@ async function handleTransaction(req, res) {
   }
 }
 
-// Override the /transactions/create route to enqueue requests
-router.post('/transactions/create', authenticateToken, (req, res) => {
-  transactionQueue.push({ req, res });
-  processNextTransaction();
+// Route to handle transactions
+router.post('/transactions/create', authenticateToken, async (req, res) => {
+  try {
+    await handleTransaction(req, res);
+  } catch (error) {
+    console.error('Transaction route error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ message: 'Internal server error' });
+    }
+  }
 });
 
 // POST /api/accounts/create - create a new account for the logged-in user
